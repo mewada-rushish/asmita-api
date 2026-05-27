@@ -1,6 +1,7 @@
 const UserRepository = require('../../repositories/auth/userRepository');
 const jwt = require('jsonwebtoken');
 
+// In-memory cache for OTP validation (Note: Migrate to Redis for multi-instance production environments)
 const otpCache = new Map();
 
 const generateOtp = () => {
@@ -10,9 +11,12 @@ const generateOtp = () => {
 const dispatchSmsAlert = async (mobile, otp) => {
   const API_KEY = process.env.SMSALERT_AUTH_KEY;
   const SENDER_ID = process.env.SMSALERT_SENDER_ID || 'ASMITA';
-  const message = `Your login OTP for AsmitA is ${otp}. Do not share this with anyone.`;
+  const TEMPLATE_ID = process.env.SMSALERT_TEMPLATE_ID;
   
-  const url = `https://www.smsalert.co.in/api/push.json?apikey=${API_KEY}&sender=${SENDER_ID}&mobileno=${mobile}&text=${encodeURIComponent(message)}`;
+  // Strict DLT-approved template matching
+  const message = `${otp} is your OTP for AsmitA India ltd. Enter this code to validate your identity.`;
+  
+  const url = `https://www.smsalert.co.in/api/push.json?apikey=${API_KEY}&sender=${SENDER_ID}&mobileno=${mobile}&text=${encodeURIComponent(message)}&template_id=${TEMPLATE_ID}`;
 
   const response = await fetch(url, { method: 'POST' });
   const data = await response.json();
@@ -39,7 +43,7 @@ const initiateLogin = async (req, res, body) => {
     }
 
     const otp = generateOtp();
-    const expiresAt = Date.now() + 5 * 60 * 1000; 
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5-minute TTL
     
     otpCache.set(mobile, { otp, expiresAt });
 
@@ -74,6 +78,7 @@ const verifyOtp = async (req, res, body) => {
 
     const cachedRecord = otpCache.get(mobile);
 
+    // Validate OTP existence and TTL bounds
     if (!cachedRecord || cachedRecord.expiresAt < Date.now()) {
       otpCache.delete(mobile);
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -85,6 +90,7 @@ const verifyOtp = async (req, res, body) => {
       return res.end(JSON.stringify({ status: 'error', message: 'Invalid OTP.' }));
     }
 
+    // Purge OTP post-verification to prevent replay attacks
     otpCache.delete(mobile);
 
     const user = await UserRepository.findByMobile(mobile);
@@ -94,6 +100,7 @@ const verifyOtp = async (req, res, body) => {
       return res.end(JSON.stringify({ status: 'error', message: 'User record not found during verification.' }));
     }
 
+    // Issue stateless session token
     const token = jwt.sign(
       { 
         user_id: user.user_id, 
