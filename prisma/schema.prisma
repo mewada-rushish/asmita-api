@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model ads {
+  ad_id            Int      @id @default(autoincrement())
+  banner_image_url String   @db.VarChar(255)
+  link_url         String?  @db.VarChar(255)
+  click_count      Int?     @default(0)
+  created_at       DateTime @default(now()) @db.Timestamp(0)
+}
+
+model app_settings {
+  setting_key   String   @id @db.VarChar(100)
+  setting_value String   @db.LongText
+  updated_at    DateTime @default(now()) @db.Timestamp(0)
+}
+
+model audit_logs {
+  id          BigInt   @id @default(autoincrement())
+  request_id  String?  @db.VarChar(64)
+  user_id     Int?
+  user_name   String?  @db.VarChar(150)
+  role        String?  @db.VarChar(80)
+  module      String   @db.VarChar(80)
+  action      String   @db.VarChar(120)
+  description String?  @db.Text
+  old_value   String?  @db.LongText
+  new_value   String?  @db.LongText
+  ip_address  String?  @db.VarChar(80)
+  device_info String?  @db.VarChar(255)
+  status      String   @default("SUCCESS") @db.VarChar(30)
+  created_at  DateTime @default(now()) @db.Timestamp(0)
+
+  @@index([created_at], map: "idx_audit_created_at")
+  @@index([module, action], map: "idx_audit_module_action")
+  @@index([status], map: "idx_audit_status")
+  @@index([user_id], map: "idx_audit_user_id")
+}
+
+model bookings {
+  booking_id        Int               @id @default(autoincrement())
+  user_id           Int
+  service_id        Int
+  provider_id       Int
+  booking_date      DateTime          @db.DateTime(0)
+  status            bookings_status
+  users             users             @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "bookings_ibfk_1")
+  services          services          @relation(fields: [service_id], references: [service_id], onDelete: Cascade, onUpdate: Restrict, map: "bookings_ibfk_2")
+  service_providers service_providers @relation(fields: [provider_id], references: [provider_id], onDelete: Cascade, onUpdate: Restrict, map: "bookings_ibfk_3")
+
+  @@index([provider_id], map: "provider_id")
+  @@index([service_id], map: "service_id")
+  @@index([user_id], map: "user_id")
+}
+
+model flats {
+  flat_id             Int                   @id @default(autoincrement())
+  floor_id            Int
+  flat_number         String                @db.VarChar(50)
+  unit_type           String?               @db.VarChar(10)
+  is_merged           Boolean?              @default(false)
+  merged_from         String?               @db.VarChar(50)
+  created_at          DateTime              @default(now()) @db.Timestamp(0)
+  status              String?               @db.VarChar(20)
+  merged_unit_id      Int?
+  owner_id            Int?
+  floors              floors                @relation(fields: [floor_id], references: [floor_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_flat_floor")
+  merged_unit_members merged_unit_members[]
+  merged_units        merged_units?
+  parking_slots       parking_slots[]
+  user_flat_mapping   user_flat_mapping[]
+
+  @@unique([floor_id, flat_number], map: "unique_flat_per_floor")
+}
+
+model floors {
+  floor_id     Int            @id @default(autoincrement())
+  tower_id     Int
+  floor_number Int
+  created_at   DateTime       @default(now()) @db.Timestamp(0)
+  flats        flats[]
+  towers       towers         @relation(fields: [tower_id], references: [tower_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_floor_tower")
+  merged_units merged_units[]
+
+  @@unique([tower_id, floor_number], map: "unique_floor_per_tower")
+}
+
+model gate_entry_logs {
+  id                         BigInt                       @id @default(autoincrement())
+  society_id                 Int
+  gate_id                    Int?
+  invite_id                  BigInt?
+  invite_guest_id            BigInt?
+  visitor_name               String?                      @db.VarChar(150)
+  mobile_number              String?                      @db.VarChar(20)
+  vehicle_number             String?                      @db.VarChar(40)
+  entry_type                 gate_entry_logs_entry_type
+  entry_status               gate_entry_logs_entry_status
+  denial_reason              String?                      @db.VarChar(255)
+  checked_in_by_guard_id     Int?
+  checked_out_by_guard_id    Int?
+  checked_in_at              DateTime?                    @db.DateTime(0)
+  checked_out_at             DateTime?                    @db.DateTime(0)
+  created_at                 DateTime                     @default(now()) @db.Timestamp(0)
+  pre_approved_invites       pre_approved_invites?        @relation(fields: [invite_id], references: [id], onUpdate: Restrict, map: "fk_gel_invite")
+  pre_approved_invite_guests pre_approved_invite_guests?  @relation(fields: [invite_guest_id], references: [id], onUpdate: Restrict, map: "fk_gel_invite_guest")
+
+  @@index([created_at], map: "idx_gel_created_at")
+  @@index([invite_id], map: "idx_gel_invite")
+  @@index([invite_guest_id], map: "idx_gel_invite_guest")
+  @@index([society_id], map: "idx_gel_society")
+  @@index([entry_status], map: "idx_gel_status")
+}
+
+model merged_unit_members {
+  merged_unit_id Int
+  flat_id        Int
+  created_at     DateTime     @default(now()) @db.Timestamp(0)
+  flats          flats        @relation(fields: [flat_id], references: [flat_id], onDelete: Cascade, map: "fk_mum_flat")
+  merged_units   merged_units @relation(fields: [merged_unit_id], references: [merged_unit_id], onDelete: Cascade, map: "fk_mum_merged_unit")
+
+  @@id([merged_unit_id, flat_id])
+  @@index([flat_id], map: "idx_mum_flat")
+}
+
+model merged_units {
+  merged_unit_id      Int                   @id @default(autoincrement())
+  floor_id            Int
+  merged_flat_id      Int                   @unique(map: "uq_merged_units_flat")
+  created_at          DateTime              @default(now()) @db.Timestamp(0)
+  merged_unit_members merged_unit_members[]
+  flats               flats                 @relation(fields: [merged_flat_id], references: [flat_id], onDelete: Cascade, map: "fk_merged_units_flat")
+  floors              floors                @relation(fields: [floor_id], references: [floor_id], onDelete: Cascade, map: "fk_merged_units_floor")
+
+  @@index([floor_id], map: "idx_merged_units_floor")
+}
+
+model parking_slots {
+  slot_id    Int       @id @default(autoincrement())
+  society_id Int
+  slot_code  String    @db.VarChar(40)
+  slot_type  String?   @db.VarChar(20)
+  flat_id    Int?
+  is_active  Boolean   @default(true)
+  created_at DateTime  @default(now()) @db.Timestamp(0)
+  updated_at DateTime  @default(now()) @db.Timestamp(0)
+  flats      flats?    @relation(fields: [flat_id], references: [flat_id], onUpdate: Restrict, map: "fk_parking_flat")
+  societies  societies @relation(fields: [society_id], references: [society_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_parking_society")
+
+  @@unique([society_id, slot_code], map: "unique_parking_slot_per_society")
+  @@index([flat_id], map: "idx_parking_flat")
+  @@index([society_id], map: "idx_parking_society")
+}
+
+model password_reset_tokens {
+  id         BigInt    @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @unique(map: "uq_prt_token_hash") @db.Char(64)
+  expires_at DateTime  @db.DateTime(0)
+  used_at    DateTime? @db.DateTime(0)
+  created_at DateTime  @default(now()) @db.Timestamp(0)
+
+  @@index([expires_at], map: "idx_prt_expires")
+  @@index([user_id], map: "idx_prt_user")
+}
+
+model pre_approved_invite_guests {
+  id                   BigInt                            @id @default(autoincrement())
+  invite_id            BigInt
+  guest_name           String?                           @db.VarChar(150)
+  mobile_number        String?                           @db.VarChar(20)
+  vehicle_number       String?                           @db.VarChar(40)
+  qr_code              String?                           @db.VarChar(120)
+  pass_code            String?                           @db.VarChar(32)
+  status               pre_approved_invite_guests_status @default(pending)
+  checked_in_at        DateTime?                         @db.DateTime(0)
+  checked_out_at       DateTime?                         @db.DateTime(0)
+  created_at           DateTime                          @default(now()) @db.Timestamp(0)
+  gate_entry_logs      gate_entry_logs[]
+  pre_approved_invites pre_approved_invites              @relation(fields: [invite_id], references: [id], onDelete: Cascade, onUpdate: Restrict, map: "fk_paig_invite")
+
+  @@index([invite_id], map: "idx_paig_invite")
+  @@index([pass_code], map: "idx_paig_pass")
+  @@index([qr_code], map: "idx_paig_qr")
+}
+
+model pre_approved_invites {
+  id                         BigInt                               @id @default(autoincrement())
+  society_id                 Int
+  tower_id                   Int?
+  unit_id                    Int?
+  resident_id                Int
+  invite_type                pre_approved_invites_invite_type
+  invite_sub_type            pre_approved_invites_invite_sub_type
+  title                      String?                              @db.VarChar(150)
+  visitor_name               String?                              @db.VarChar(150)
+  mobile_number              String?                              @db.VarChar(20)
+  company_name               String?                              @db.VarChar(150)
+  vehicle_number             String?                              @db.VarChar(40)
+  purpose                    String?                              @db.VarChar(255)
+  valid_from                 DateTime?                            @db.Date
+  valid_to                   DateTime?                            @db.Date
+  start_time                 DateTime?                            @db.Time(0)
+  end_time                   DateTime?                            @db.Time(0)
+  allowed_days               String?                              @db.LongText
+  entries_per_day            Int?
+  max_guest_count            Int?
+  qr_code                    String?                              @db.VarChar(120)
+  pass_code                  String?                              @db.VarChar(32)
+  is_private                 Boolean                              @default(false)
+  approval_required          Boolean                              @default(false)
+  status                     pre_approved_invites_status          @default(active)
+  created_by                 Int?
+  created_at                 DateTime                             @default(now()) @db.Timestamp(0)
+  updated_at                 DateTime                             @default(now()) @db.Timestamp(0)
+  gate_entry_logs            gate_entry_logs[]
+  pre_approved_invite_guests pre_approved_invite_guests[]
+
+  @@index([pass_code], map: "idx_pai_pass")
+  @@index([qr_code], map: "idx_pai_qr")
+  @@index([resident_id], map: "idx_pai_resident")
+  @@index([society_id], map: "idx_pai_society")
+  @@index([status], map: "idx_pai_status")
+  @@index([invite_type], map: "idx_pai_type")
+  @@index([valid_from, valid_to], map: "idx_pai_validity")
+}
+
+model service_providers {
+  provider_id    Int        @id @default(autoincrement())
+  provider_name  String     @db.VarChar(255)
+  contact_number String?    @db.VarChar(20)
+  service_id     Int
+  bookings       bookings[]
+  services       services   @relation(fields: [service_id], references: [service_id], onDelete: Cascade, onUpdate: Restrict, map: "service_providers_ibfk_1")
+
+  @@index([service_id], map: "service_id")
+}
+
+model services {
+  service_id        Int                 @id @default(autoincrement())
+  service_name      String              @db.VarChar(255)
+  society_id        Int?
+  bookings          bookings[]
+  service_providers service_providers[]
+  societies         societies?          @relation(fields: [society_id], references: [society_id], onUpdate: Restrict, map: "services_ibfk_1")
+
+  @@index([society_id], map: "society_id")
+}
+
+model societies {
+  society_id          Int             @id @default(autoincrement())
+  society_name        String          @db.VarChar(255)
+  icon_key            String?         @db.VarChar(50)
+  address             String?         @db.Text
+  contact_email       String?         @db.VarChar(150)
+  contact_number      String?         @db.VarChar(20)
+  city                String?         @db.VarChar(100)
+  state               String?         @db.VarChar(100)
+  country             String?         @db.VarChar(100)
+  pincode             String?         @db.VarChar(10)
+  google_pin_location String?         @db.VarChar(255)
+  created_at          DateTime        @default(now()) @db.Timestamp(0)
+  is_active           Boolean?        @default(true)
+  updated_at          DateTime        @default(now()) @db.Timestamp(0)
+  society_admin_id    Int?
+  latitude            Decimal?        @db.Decimal(10, 8)
+  longitude           Decimal?        @db.Decimal(11, 8)
+  google_map_url      String?         @db.VarChar(255)
+  icon_url            String?         @db.VarChar(255)
+  parking_slots       parking_slots[]
+  services            services[]
+  users               users?          @relation(fields: [society_admin_id], references: [user_id], map: "fk_society_admin")
+  towers              towers[]
+
+  @@index([society_admin_id], map: "fk_society_admin")
+}
+
+model support_tickets {
+  ticket_id   Int                    @id @default(autoincrement())
+  user_id     Int
+  subject     String                 @db.VarChar(255)
+  description String?                @db.Text
+  status      support_tickets_status
+  created_at  DateTime               @default(now()) @db.Timestamp(0)
+  users       users                  @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "support_tickets_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model towers {
+  tower_id   Int       @id @default(autoincrement())
+  society_id Int
+  tower_name String    @db.VarChar(100)
+  created_at DateTime  @default(now()) @db.Timestamp(0)
+  updated_at DateTime  @default(now()) @db.Timestamp(0)
+  is_active  Boolean   @default(true)
+  floors     floors[]
+  societies  societies @relation(fields: [society_id], references: [society_id], onDelete: Cascade, onUpdate: Restrict, map: "fk_tower_society")
+
+  @@unique([society_id, tower_name], map: "unique_tower_per_society")
+}
+
+model user_family_members {
+  family_member_id Int                             @id @default(autoincrement())
+  user_id          Int
+  member_name      String                          @db.VarChar(120)
+  relation         String?                         @db.VarChar(60)
+  member_type      user_family_members_member_type @default(Other)
+  created_at       DateTime                        @default(now()) @db.Timestamp(0)
+
+  @@index([user_id], map: "idx_ufm_user")
+}
+
+model user_flat_mapping {
+  mapping_id     Int                              @id @default(autoincrement())
+  user_id        Int
+  flat_id        Int
+  ownership_type user_flat_mapping_ownership_type
+  users          users                            @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: Restrict, map: "user_flat_mapping_ibfk_1")
+  flats          flats                            @relation(fields: [flat_id], references: [flat_id], onDelete: Cascade, onUpdate: Restrict, map: "user_flat_mapping_ibfk_2")
+
+  @@unique([user_id, flat_id], map: "user_id")
+  @@index([flat_id], map: "flat_id")
+}
+
+model user_vehicles {
+  vehicle_id     Int                        @id @default(autoincrement())
+  user_id        Int
+  vehicle_number String                     @db.VarChar(40)
+  vehicle_type   user_vehicles_vehicle_type @default(Other)
+  model          String?                    @db.VarChar(80)
+  color          String?                    @db.VarChar(40)
+  parking_slot   String?                    @db.VarChar(40)
+  created_at     DateTime                   @default(now()) @db.Timestamp(0)
+
+  @@index([user_id], map: "idx_uv_user")
+  @@index([vehicle_number], map: "idx_uv_vehicle_number")
+}
+
+model users {
+  user_id           Int                 @id @default(autoincrement())
+  full_name         String              @db.VarChar(255)
+  email_id          String              @unique(map: "email_id") @db.VarChar(255)
+  mobile_number     String?             @db.VarChar(20)
+  gender            users_gender?
+  account_type      users_account_type  @default(app)
+  user_type         String              @db.VarChar(255)
+  os_type           users_os_type?
+  society_id        Int?
+  password_hash     String              @db.VarChar(255)
+  is_active         Boolean?            @default(true)
+  created_at        DateTime            @default(now()) @db.Timestamp(0)
+  updated_at        DateTime            @default(now()) @db.Timestamp(0)
+  bookings          bookings[]
+  societies         societies[]
+  support_tickets   support_tickets[]
+  user_flat_mapping user_flat_mapping[]
+
+  @@index([society_id], map: "idx_users_society_id")
+}
+
+model visitor_entries {
+  id                    Int                    @id @default(autoincrement())
+  society_id            Int
+  tower_id              Int?
+  unit_id               Int?
+  resident_user_id      Int?
+  visitor_name          String                 @db.VarChar(120)
+  visitor_phone         String                 @db.VarChar(20)
+  visitor_type_id       Int?
+  purpose               String?                @db.VarChar(255)
+  vehicle_number        String?                @db.VarChar(40)
+  no_of_visitors        Int                    @default(1)
+  status                visitor_entries_status @default(PENDING)
+  requested_by_guard_id Int?
+  approved_by_user_id   Int?
+  requested_at          DateTime               @default(now()) @db.DateTime(0)
+  approved_at           DateTime?              @db.DateTime(0)
+  checkin_at            DateTime?              @db.DateTime(0)
+  checkout_at           DateTime?              @db.DateTime(0)
+  rejection_reason      String?                @db.VarChar(255)
+  remarks               String?                @db.VarChar(255)
+  created_at            DateTime               @default(now()) @db.Timestamp(0)
+  updated_at            DateTime               @default(now()) @db.Timestamp(0)
+
+  @@index([requested_at], map: "idx_ve_requested_at")
+  @@index([resident_user_id], map: "idx_ve_resident")
+  @@index([society_id], map: "idx_ve_society")
+  @@index([status], map: "idx_ve_status")
+  @@index([tower_id], map: "idx_ve_tower")
+  @@index([visitor_type_id], map: "idx_ve_type")
+  @@index([unit_id], map: "idx_ve_unit")
+}
+
+model visitor_types {
+  id         Int      @id @default(autoincrement())
+  name       String   @unique(map: "uq_visitor_types_name") @db.VarChar(100)
+  status     String   @default("active") @db.VarChar(20)
+  created_at DateTime @default(now()) @db.Timestamp(0)
+  updated_at DateTime @default(now()) @db.Timestamp(0)
+}
+
+enum user_vehicles_vehicle_type {
+  Car
+  Bike
+  Other
+}
+
+enum user_flat_mapping_ownership_type {
+  Owner
+  Tenant
+}
+
+enum support_tickets_status {
+  Open
+  In_Progress @map("In Progress")
+  Closed
+}
+
+enum users_gender {
+  Male
+  Female
+  Other
+}
+
+enum user_family_members_member_type {
+  Adult
+  Child
+  Other
+}
+
+enum pre_approved_invites_invite_type {
+  guest
+  cab
+  delivery
+}
+
+enum users_account_type {
+  app
+  management
+}
+
+enum bookings_status {
+  Upcoming
+  Completed
+  Cancelled
+}
+
+enum pre_approved_invites_invite_sub_type {
+  quick
+  group
+  frequent
+  private
+  once
+}
+
+enum pre_approved_invite_guests_status {
+  pending
+  checked_in
+  checked_out
+  cancelled
+}
+
+enum users_os_type {
+  Android
+  iOS
+}
+
+enum gate_entry_logs_entry_type {
+  guest
+  cab
+  delivery
+}
+
+enum gate_entry_logs_entry_status {
+  allowed
+  denied
+  checked_in
+  checked_out
+}
+
+enum visitor_entries_status {
+  PENDING
+  APPROVED
+  REJECTED
+  CHECKED_IN
+  CHECKED_OUT
+}
+
+enum pre_approved_invites_status {
+  draft
+  active
+  used
+  expired
+  cancelled
+  blocked
+}
