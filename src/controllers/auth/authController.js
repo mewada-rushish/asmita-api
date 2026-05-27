@@ -1,7 +1,7 @@
 const UserRepository = require('../../repositories/auth/userRepository');
 const jwt = require('jsonwebtoken');
 
-// In-memory cache for OTP validation (Note: Migrate to Redis for multi-instance production environments)
+// In-memory cache for OTP validation
 const otpCache = new Map();
 
 const generateOtp = () => {
@@ -10,7 +10,7 @@ const generateOtp = () => {
 
 const dispatchSmsAlert = async (mobile, otp) => {
   const API_KEY = process.env.SMSALERT_AUTH_KEY;
-  const SENDER_ID = process.env.SMSALERT_SENDER_ID || 'ASMITA';
+  const SENDER_ID = process.env.SMSALERT_SENDER_ID;
   const TEMPLATE_ID = process.env.SMSALERT_TEMPLATE_ID;
   
   // Strict DLT-approved template matching
