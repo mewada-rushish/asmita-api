@@ -1,4 +1,4 @@
-const { initiateLogin, verifyOtp } = require('./controllers/auth/authController');
+const { initiateLogin, verifyOtp, registerUser } = require('./controllers/auth/authController');
 
 const handleRequest = async (req, res) => {
   // Global CORS Setup
@@ -25,6 +25,9 @@ const handleRequest = async (req, res) => {
         await initiateLogin(req, res, body);
       } else if (pathname === '/api/auth/login/verify' && req.method === 'POST') {
         await verifyOtp(req, res, body);
+      } else if (pathname === '/api/auth/register' && req.method === 'POST') {
+        // NEW FEATURE: Added the registration endpoint
+        await registerUser(req, res, body);
       } else {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `Endpoint Not Found: [${req.method}] ${pathname}` }));

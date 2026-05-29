@@ -26,6 +26,7 @@ const dispatchSmsAlert = async (mobile, otp) => {
   }
 };
 
+/// 1. UNIFIED INITIATE: Sends an OTP to any valid number (Existing or New User)
 const initiateLogin = async (req, res, body) => {
   try {
     const { mobile } = JSON.parse(body);
@@ -35,12 +36,8 @@ const initiateLogin = async (req, res, body) => {
       return res.end(JSON.stringify({ status: 'error', message: 'Mobile number is required.' }));
     }
 
-    const user = await UserRepository.findByMobile(mobile);
-    
-    if (!user) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'User record not found.' }));
-    }
+    // REMOVED: UserRepository.findByMobile check. 
+    // We now send an OTP to EVERYONE to verify they own the phone number first.
 
     const otp = generateOtp();
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5-minute TTL
@@ -67,6 +64,7 @@ const initiateLogin = async (req, res, body) => {
   }
 };
 
+/// 2. VERIFY: Checks the OTP, then checks if the user exists in the DB.
 const verifyOtp = async (req, res, body) => {
   try {
     const { mobile, otp } = JSON.parse(body);
@@ -93,14 +91,21 @@ const verifyOtp = async (req, res, body) => {
     // Purge OTP post-verification to prevent replay attacks
     otpCache.delete(mobile);
 
+    // OTP IS CORRECT -> Now we check the Database
     const user = await UserRepository.findByMobile(mobile);
     
     if (!user) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'User record not found during verification.' }));
+      // NEW FLOW: The user verified their number, but they aren't in the DB.
+      // Tell the Flutter app to route them to the RegistrationScreen.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ 
+        status: 'registration_required', 
+        is_new_user: true,
+        message: 'OTP verified. Please complete your profile.' 
+      }));
     }
 
-    // Issue stateless session token
+    // Existing User: Issue stateless session token
     const token = jwt.sign(
       { 
         user_id: user.user_id, 
@@ -130,4 +135,67 @@ const verifyOtp = async (req, res, body) => {
   }
 };
 
-module.exports = { initiateLogin, verifyOtp };
+/// 3. NEW FEATURE: Registers the new user after they submit the Flutter form
+const registerUser = async (req, res, body) => {
+  try {
+    const data = JSON.parse(body);
+    const { mobile_number, full_name, email_id, gender, ownership_type } = data;
+
+    if (!mobile_number || !full_name) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ status: 'error', message: 'Missing required fields.' }));
+    }
+
+    // Create the user in Prisma
+    const newUser = await UserRepository.create({
+      mobile_number: mobile_number,
+      full_name: full_name,
+      email_id: email_id, 
+      gender: gender,
+      user_type: ownership_type || 'Resident', 
+      account_type: 'app',
+      // Dummy hash to satisfy DB requirement if password_hash is not nullable yet
+      password_hash: 'OTP_AUTH_ONLY', 
+      is_active: true
+    });
+
+    // Automatically log them in after registration
+    const token = jwt.sign(
+      { 
+        user_id: newUser.user_id, 
+        user_type: newUser.user_type, 
+        society_id: newUser.society_id 
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' } 
+    );
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      status: 'success', 
+      token,
+      data: {
+          user_id: newUser.user_id,
+          full_name: newUser.full_name,
+          user_type: newUser.user_type, 
+          account_type: newUser.account_type,
+          society_id: newUser.society_id,
+          email_id: newUser.email_id,
+          mobile_number: newUser.mobile_number,
+          gender: newUser.gender
+      }
+    }));
+  } catch (err) {
+    console.error('[AUTH_REGISTER_ERROR]', err);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    
+    // Check if it's a unique constraint violation (e.g. Email already exists)
+    if (err.code === 'P2002') {
+      return res.end(JSON.stringify({ status: 'error', message: 'An account with this email already exists.' }));
+    }
+    
+    res.end(JSON.stringify({ error: 'Internal Server Error.' }));
+  }
+};
+
+module.exports = { initiateLogin, verifyOtp, registerUser };
