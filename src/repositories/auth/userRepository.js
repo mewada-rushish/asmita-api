@@ -13,7 +13,20 @@ const UserRepository = {
     });
   },
 
-  async create(userData) {
+  async create(userData, flatId = null, ownershipType = 'Owner') {
+    if (flatId) {
+      return await prisma.users.create({ 
+        data: {
+          ...userData,
+          user_flat_mapping: {
+            create: {
+              flat_id: flatId,
+              ownership_type: ownershipType.charAt(0).toUpperCase() + ownershipType.slice(1).toLowerCase()
+            }
+          }
+        }
+      });
+    }
     return await prisma.users.create({ 
       data: userData 
     });

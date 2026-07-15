@@ -1,200 +1,151 @@
 const UserRepository = require('../../repositories/auth/userRepository');
 const jwt = require('jsonwebtoken');
 
-// In-memory cache for OTP validation
+/**
+ * In-memory OTP cache.
+ * @type {Map<string, {otp: string, expiresAt: number}>}
+ */
 const otpCache = new Map();
 
-const generateOtp = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-};
+/**
+ * Generates a 6-digit numeric OTP.
+ * @returns {string}
+ */
+const generateOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
 
+/**
+ * Dispatches SMS via SMSAlert gateway.
+ * @param {string} mobile - Recipient mobile number.
+ * @param {string} otp - OTP code to send.
+ * @throws {Error} If environment variables are missing or gateway request fails.
+ */
 const dispatchSmsAlert = async (mobile, otp) => {
-  const API_KEY = process.env.SMSALERT_AUTH_KEY;
-  const SENDER_ID = process.env.SMSALERT_SENDER_ID;
-  const TEMPLATE_ID = process.env.SMSALERT_TEMPLATE_ID;
-  
-  // Strict DLT-approved template matching
+  const { SMSALERT_AUTH_KEY, SMSALERT_SENDER_ID, SMSALERT_TEMPLATE_ID } = process.env;
+
+  if (!SMSALERT_AUTH_KEY || !SMSALERT_SENDER_ID || !SMSALERT_TEMPLATE_ID) {
+    throw new Error('SMS_GATEWAY_CONFIG_MISSING');
+  }
+
   const message = `${otp} is your OTP for AsmitA India ltd. Enter this code to validate your identity.`;
-  
-  const url = `https://www.smsalert.co.in/api/push.json?apikey=${API_KEY}&sender=${SENDER_ID}&mobileno=${mobile}&text=${encodeURIComponent(message)}&template_id=${TEMPLATE_ID}`;
+  const url = `https://www.smsalert.co.in/api/push.json?apikey=${SMSALERT_AUTH_KEY}&sender=${SMSALERT_SENDER_ID}&mobileno=${mobile}&text=${encodeURIComponent(message)}&template_id=${SMSALERT_TEMPLATE_ID}`;
 
   const response = await fetch(url, { method: 'POST' });
   const data = await response.json();
-  
+
   if (data.status !== 'success') {
-    throw new Error(`SMS Gateway Error: ${JSON.stringify(data)}`);
+    throw new Error(`SMS_GATEWAY_REJECTED: ${JSON.stringify(data)}`);
   }
 };
 
-/// 1. UNIFIED INITIATE: Sends an OTP to any valid number (Existing or New User)
+/**
+ * Initiates the login process by dispatching an OTP.
+ */
 const initiateLogin = async (req, res, body) => {
   try {
     const { mobile } = JSON.parse(body);
 
     if (!mobile) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ status: 'error', message: 'Mobile number is required.' }));
     }
 
-    // REMOVED: UserRepository.findByMobile check. 
-    // We now send an OTP to EVERYONE to verify they own the phone number first.
-
     const otp = generateOtp();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5-minute TTL
-    
-    otpCache.set(mobile, { otp, expiresAt });
+    otpCache.set(mobile, { otp, expiresAt: Date.now() + 300000 }); // 5 min expiry
 
-    try {
-      await dispatchSmsAlert(mobile, otp);
-    } catch (smsError) {
-      console.error('[SMS_DISPATCH_FAILURE]', smsError);
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'Failed to dispatch OTP.' }));
-    }
+    await dispatchSmsAlert(mobile, otp);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      status: 'success', 
-      message: 'OTP dispatched successfully.' 
-    }));
+    res.end(JSON.stringify({ status: 'success', message: 'OTP dispatched successfully.' }));
   } catch (err) {
-    console.error('[AUTH_INITIATE_ERROR]', err);
+    console.error('[AUTH_INITIATE_FAILURE]', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal Server Error.' }));
+    res.end(JSON.stringify({ status: 'error', message: err.message }));
   }
 };
 
-/// 2. VERIFY: Checks the OTP, then checks if the user exists in the DB.
+/**
+ * Verifies OTP and checks user existence to determine session vs. registration flow.
+ */
 const verifyOtp = async (req, res, body) => {
   try {
     const { mobile, otp } = JSON.parse(body);
-
-    if (!mobile || !otp) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'Mobile number and OTP are required.' }));
-    }
-
     const cachedRecord = otpCache.get(mobile);
 
-    // Validate OTP existence and TTL bounds
-    if (!cachedRecord || cachedRecord.expiresAt < Date.now()) {
-      otpCache.delete(mobile);
+    if (!cachedRecord || cachedRecord.expiresAt < Date.now() || cachedRecord.otp !== otp) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'OTP expired or invalid.' }));
+      return res.end(JSON.stringify({ status: 'error', message: 'Invalid or expired OTP.' }));
     }
 
-    if (cachedRecord.otp !== otp) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'Invalid OTP.' }));
-    }
-
-    // Purge OTP post-verification to prevent replay attacks
     otpCache.delete(mobile);
 
-    // OTP IS CORRECT -> Now we check the Database
     const user = await UserRepository.findByMobile(mobile);
-    
+
+    // New User Flow
     if (!user) {
-      // NEW FLOW: The user verified their number, but they aren't in the DB.
-      // Tell the Flutter app to route them to the RegistrationScreen.
-      res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ 
         status: 'registration_required', 
-        is_new_user: true,
-        message: 'OTP verified. Please complete your profile.' 
+        is_new_user: true 
       }));
     }
 
-    // Existing User: Issue stateless session token
+    // Existing User Flow
     const token = jwt.sign(
-      { 
-        user_id: user.user_id, 
-        user_type: user.user_type, 
-        society_id: user.society_id 
-      },
+      { user_id: user.user_id, user_type: user.user_type, society_id: user.society_id },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' } 
+      { expiresIn: '30d' }
     );
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      status: 'success', 
-      token,
-      data: {
-          user_id: user.user_id,
-          full_name: user.full_name,
-          user_type: user.user_type, 
-          account_type: user.account_type,
-          society_id: user.society_id
-      }
-    }));
+    res.end(JSON.stringify({ status: 'success', token, data: user }));
   } catch (err) {
-    console.error('[AUTH_VERIFY_ERROR]', err);
+    console.error('[AUTH_VERIFY_FAILURE]', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal Server Error.' }));
+    res.end(JSON.stringify({ status: 'error', message: 'Authentication verification failed.' }));
   }
 };
 
-/// 3. NEW FEATURE: Registers the new user after they submit the Flutter form
+/**
+ * Persists new user to database and issues session token.
+ */
 const registerUser = async (req, res, body) => {
   try {
     const data = JSON.parse(body);
-    const { mobile_number, full_name, email_id, gender, ownership_type } = data;
+    
+    // For mapping
+    const societyId = data.society_id ? parseInt(data.society_id) : null;
+    const flatId = data.flat_id ? parseInt(data.flat_id) : null;
+    const ownershipType = data.ownership_type || 'Tenant';
 
-    if (!mobile_number || !full_name) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'error', message: 'Missing required fields.' }));
-    }
-
-    // Create the user in Prisma
-    const newUser = await UserRepository.create({
-      mobile_number: mobile_number,
-      full_name: full_name,
-      email_id: email_id, 
-      gender: gender,
-      user_type: ownership_type || 'Resident', 
+    const userData = {
+      mobile_number: data.mobile_number,
+      full_name: data.full_name,
+      email_id: data.email_id,
+      gender: data.gender,
+      user_type: ownershipType,
       account_type: 'app',
-      // Dummy hash to satisfy DB requirement if password_hash is not nullable yet
-      password_hash: 'OTP_AUTH_ONLY', 
-      is_active: true
-    });
+      password_hash: 'OTP_AUTH_ONLY',
+      is_active: true,
+      society_id: societyId
+    };
 
-    // Automatically log them in after registration
+    const newUser = await UserRepository.create(userData, flatId, ownershipType);
+
     const token = jwt.sign(
-      { 
-        user_id: newUser.user_id, 
-        user_type: newUser.user_type, 
-        society_id: newUser.society_id 
-      },
+      { user_id: newUser.user_id, user_type: newUser.user_type, society_id: newUser.society_id },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' } 
+      { expiresIn: '30d' }
     );
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      status: 'success', 
-      token,
-      data: {
-          user_id: newUser.user_id,
-          full_name: newUser.full_name,
-          user_type: newUser.user_type, 
-          account_type: newUser.account_type,
-          society_id: newUser.society_id,
-          email_id: newUser.email_id,
-          mobile_number: newUser.mobile_number,
-          gender: newUser.gender
-      }
-    }));
+    res.end(JSON.stringify({ status: 'success', token, data: newUser }));
   } catch (err) {
-    console.error('[AUTH_REGISTER_ERROR]', err);
+    console.error('[AUTH_REGISTER_FAILURE]', err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
     
-    // Check if it's a unique constraint violation (e.g. Email already exists)
     if (err.code === 'P2002') {
-      return res.end(JSON.stringify({ status: 'error', message: 'An account with this email already exists.' }));
+      return res.end(JSON.stringify({ status: 'error', message: 'Account already exists or duplicate mapping.' }));
     }
     
-    res.end(JSON.stringify({ error: 'Internal Server Error.' }));
+    res.end(JSON.stringify({ status: 'error', message: 'Registration failed.' }));
   }
 };
 
